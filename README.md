@@ -4,7 +4,7 @@ Zde najdete sadu skriptů pro snadný import kompletních knih ze sbírky [Náro
 
 ## get\_djvu.py
 
-Tento skript stáhne a sloučí jednotlivé naskenované stránky ve formátu DjVu do jednoho velkého DjVu dokumentu. Navíc pak zkonvertuje metadata knihy do Wikišablony [Book](https://commons.wikimedia.org/wiki/Template:Book). Pokud jsou stránky naskenované v jiném formátu, například JPEG, skript nebude nic dělat.
+Tento skript stáhne jednotlivé naskenované stránky ve formátu DjVu, vloží do nich OCR soubory jako textovou vrstvu a vše sloučí do jednoho velkého DjVu dokumentu. Navíc pak zkonvertuje metadata knihy do Wikišablony [Book](https://commons.wikimedia.org/wiki/Template:Book). Pokud jsou stránky naskenované v jiném formátu, například JPEG, skript nebude nic dělat.
 
 **Parametry:** Cesta nebo URL k METS dokumentu knihy.
 
@@ -31,7 +31,8 @@ Můžete zadat libovolný počet METS dokumentů, skript pak bude stahovat jedno
 
 ### Závislosti:
 
-- djvm (Externí program z balíku [DjVuLibre](http://djvu.sourceforge.net/) pro manipulaci s DjVu soubory.)
+- djvm, djvused (Externí programy z balíku [DjVuLibre](http://djvu.sourceforge.net/) pro manipulaci s DjVu soubory.)
 - Python 3
   - requests
   - lxml
+  - python-djvulibre
