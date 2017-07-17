@@ -17,6 +17,7 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 from lxml import etree
+from djvu import decode, sexpr
 import requests
 import time
 import sys
@@ -46,6 +47,17 @@ def merge_djvu(outfile, pagelist):
     ret = subprocess.run(['djvm', '-c', outfile] + pagelist)
     if ret.returncode != 0:
         raise ChildProcessError('Failed to merge pages into single DJVU file')
+
+def set_djvu_text(ctx, filename, text):
+    doc = ctx.new_document(decode.FileUri(filename))
+    doc.decoding_job.wait()
+    page = doc.pages[0]
+    w, h = page.width, page.height
+    data = sexpr.Expression([sexpr.Symbol('page'), 0, 0, w-1, h-1, text])
+    script = 'select 1; set-txt; ' + data.as_string()
+    ret = subprocess.run(['djvused', '-s', '-e', script, filename])
+    if ret.returncode != 0:
+        raise ChildProcessError('Failed to create DJVU text layer')
 
 def _single_node(node, xpath):
     ret = node.xpath(xpath, namespaces=_nsmap)
@@ -141,32 +153,67 @@ def make_description(xml):
     ret.append(('Wikisource', ':s:cs:Index:{{PAGENAME}}'))
     return '{{' + '\n |'.join(['Book'] + [' = '.join(x) for x in ret]) + '\n}}'
 
-def process_mets(tempdir, filename):
+def parse_filegroup(groupnode, mimetype):
     href = '{http://www.w3.org/1999/xlink}href'
+    xpath = "m:file[@USE='Page' and @MIMETYPE='%s']" % mimetype
+    nodelist = groupnode.xpath(xpath, namespaces=_nsmap)
+    ret = dict()
+    for node in nodelist:
+        key = node.attrib['ID']
+        ret[key] = _single_node(node, "m:FLocat[@LOCTYPE='URL']").attrib[href]
+    return ret
+
+def process_mets(tempdir, filename):
     session = requests.Session()
+    ctx = decode.Context()
     outfile = os.path.basename(filename).rsplit('.', 1)[0] + '.djvu'
 
     # Parse METS file and read list of DJVU page URLs
     xml = etree.parse(filename)
-    filegrp = _single_node(xml, "/m:mets/m:fileSec/m:fileGrp[@USE='img']")
-    nodelist = filegrp.xpath("m:file[@USE='Page' and @MIMETYPE='image/vnd.djvu']/m:FLocat[@LOCTYPE='URL']", namespaces=_nsmap)
-    pageurls = [node.attrib[href] for node in nodelist]
+    imgfiles = _single_node(xml, "/m:mets/m:fileSec/m:fileGrp[@USE='img']")
+    imgurls = parse_filegroup(imgfiles, 'image/vnd.djvu')
+    txtfiles = _single_node(xml, "/m:mets/m:fileSec/m:fileGrp[@USE='txt']")
+    txturls = parse_filegroup(txtfiles, 'text/plain')
 
     # Check that there is something to do
-    if not pageurls:
+    if not imgurls:
         print('No DJVU pages found in %s' % filename)
         return
+
+    # Zip image and text URLs properly via <mets:structMap> records
+    xpath = "/m:mets/m:structMap[@TYPE='Pages']/m:div[@TYPE='Pages']"
+    structnode = _single_node(xml, xpath)
+    pageurls = []
+    for node in structnode.xpath('m:div', namespaces=_nsmap):
+        img = txt = None
+        for subnode in node.xpath('m:fptr', namespaces=_nsmap):
+            key = subnode.attrib['FILEID']
+            if key in imgurls:
+                img = imgurls[key]
+            elif key in txturls:
+                txt = txturls[key]
+        # Text URLs are optional, some books don't have them at all
+        if not img:
+            msg = '%s: No image URL for page %s'
+            raise RuntimeError(msg % (filename, node.attrib['ORDER']))
+        pageurls.append((img, txt))
 
     pagelist = []
     description = make_description(xml)
 
     # Download individual pages
-    for pagenum, url in enumerate(pageurls, 1):
+    for pagenum, (img, txt) in enumerate(pageurls, 1):
         pagefile = os.path.join(tempdir, 'page-%04d.djvu' % pagenum)
-        response = session.get(url, stream=True)
+        response = session.get(img, stream=True)
         response.raise_for_status()
         with open(pagefile, 'wb') as fw:
             fw.write(response.raw.read())
+        if txt:
+            response = session.get(txt)
+            response.raise_for_status()
+            # Response has no encoding, requests incorrectly assumes ISO-8859-1
+            response.encoding = 'utf-8'
+            set_djvu_text(ctx, pagefile, response.text.replace('\r', ''))
         pagelist.append(pagefile)
         time.sleep(1)
 
